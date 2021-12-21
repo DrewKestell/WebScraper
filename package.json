@@ -5,7 +5,8 @@
   "main": "scraper.js",
   "scripts": {
     "build": "tsc --p ./tsconfig.json",
-    "start": "node ./dist/scraper.js"
+    "start": "node ./dist/scraper.js",
+    "idle": "node ./dist/idle.js https://www.zillow.com/homes/Minneapolis,-MN_rb/"
   },
   "author": "",
   "license": "ISC",

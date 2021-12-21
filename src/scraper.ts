@@ -1,113 +1,137 @@
 import fs from "fs";
 import playwright from 'playwright';
 
-const timeout = 8000;
 const outputFile = "./listings.csv";
 
 const outputHeaders: string[] = [
   "Listing Url",
+  "Address",
+  "City",
+  "State",
+  "Zip",
   "Price",
   "Bedrooms",
   "Bathrooms",
-  "Address",
   "ZEstimate",
   "Rent Estimate",
-  "City",
-  "Zip",
   "Estimated Payment",
   "Square Footage",
   "Time On Zillow",
   "MLS Number",
-  "Year Build",
-  "HOA Fee"
+  "Year Built",
+  "HOA Fee",
+  "Scrubbed At"
 ];
 
 const processPage = async (page: playwright.Page) => {
   console.log("Processing page...");
-  await page.screenshot({path: "./page.png"});
+  //await page.screenshot({path: "./page.png"});
 
-  let index = 0;
+  let index = 1;
 
   while (true) {
-    const listings = await page.$$("a.list-card-img");
-    const listing = listings[index];
+    try {
+      const listing = await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index})`);
+      const link = await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card a.list-card-img`);
 
-    if (!listing) {
-      break;
+      // if the li doesn't exist, we're at the end of the page
+      if (!listing) {
+        console.log("Found the end of the page, moving to next page.");
+
+        break;
+      }
+
+      // if the li exists, but the "a.list-card-img" doesn't exist, it means we found an ad. skip it.
+      if (listing && !link) {
+        console.log("Found an ad, skipping it.");
+
+        index++;
+        continue;
+      }
+
+      // listings are lazy loaded, so continually scroll down the page to make sure next items are loaded into DOM
+      link?.scrollIntoViewIfNeeded();
+
+      await page.waitForTimeout(1000);
+
+      const addressBlock = await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card address`))?.innerHTML();
+      const splitAddress = addressBlock?.split(", ");
+      const address = (splitAddress && splitAddress.length === 3 && splitAddress[0]) as string ?? "";
+      const city = (splitAddress && splitAddress.length === 3 && splitAddress[1]) as string ?? "";
+      const stateZip = splitAddress && splitAddress.length === 3 && splitAddress[2].split(" ");
+      const state = (stateZip && stateZip.length === 2 && stateZip[0]) as string ?? "";
+      const zip = (stateZip && stateZip.length === 2 && stateZip[1]) as string ?? "";
+
+      const price = ((await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card div.list-card-price`))?.innerHTML()) as string ?? "").replace(/,/g, "");
+
+      const bedrooms = ((await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card ul.list-card-details li:nth-of-type(1)`))?.innerText()) as string ?? "").replace(" bds", "");
+
+      const bathrooms = ((await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card ul.list-card-details li:nth-of-type(2)`))?.innerText()) as string ?? "").replace(" ba", "");
+
+      const squareFeet = ((await  (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card ul.list-card-details li:nth-of-type(3)`))?.innerText()) as string ?? "").replace(/,/g, "").replace(" sqft", "");
+
+      link?.evaluate(l => (l as HTMLElement).click());
+      await page.waitForTimeout(8000);
+      //await page.screenshot({path: `./listing${index}.png`});
+      await processListing(page, address, city, state, zip, price, bedrooms, bathrooms, squareFeet);
+
+      index++;
+    } catch (err) {
+      // wtf
+      index++;
     }
-
-    listing.scrollIntoViewIfNeeded();
-
-    await page.waitForTimeout(timeout);
-
-    const li = await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index})`);
-    console.log(await li?.getProperty("classList"));
-    console.log(await li?.getProperty("class"));
-
-    const addressBlock = await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card address`))?.innerText();
-    const splitAddress = addressBlock?.split(", ");
-    const address = (splitAddress && splitAddress.length === 3 && splitAddress[0]) as string ?? "";
-    const city = (splitAddress && splitAddress.length === 3 && splitAddress[1]) as string ?? "";
-    const stateZip = splitAddress && splitAddress.length === 3 && splitAddress[2].split(" ");
-    const state = (stateZip && stateZip.length === 2 && stateZip[0]) as string ?? "";
-    const zip = (stateZip && stateZip.length === 2 && stateZip[1]) as string ?? "";
-
-    const price = (await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card div.list-card-price`))?.innerText()) as string ?? "";;
-
-    const bedrooms = (await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card ul.list-card-details li:nth-of-type(1)`))?.innerText()) as string ?? "";;
-
-    const bathrooms = (await (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card ul.list-card-details li:nth-of-type(2)`))?.innerText()) as string ?? "";;
-
-    const squareFeet = (await  (await page.$(`#grid-search-results ul.photo-cards > li:nth-of-type(${index}) article.list-card ul.list-card-details li:nth-of-type(3)`))?.innerText()) as string ?? "";;
-
-    await listing.evaluate(l => (l as HTMLElement).click());
-    await page.waitForTimeout(timeout);
-    await page.screenshot({path: `./listing${index}.png`});
-    await processListing(page, address, city, state, zip, price, bedrooms, bathrooms, squareFeet);
-
-    index++;
   }
-  
-  const footer = await page.$("#region-info-footer");
-  await footer?.scrollIntoViewIfNeeded();
-
-  console.log("Done processing page.");
 }
   
-const processListing = async (page: playwright.Page, address: string, city: string, state: string, zip: string, price: string, bedrooms: string, bathrooms: string, squareFeet: string) => {
+const processListing = async (page: playwright.Page, address: string, city: string, state: string, zip: string, price: string, bedrooms: string, bathrooms: string, squareFootage: string) => {
   console.log("Processing listing...");
 
   const listingUrl = page.url();
 
   // zestimate
-  const zestimate = await (await (await page.$(".ds-chip div.hdp__sc-11h2l6b-2 span.Text-c11n-8-53-2__sc-aiai24-0"))?.getProperty("innerText"))?.jsonValue();
-  
+  const zestimate1 = (await (await page.$("#ds-container .ds-chip button#dsChipZestimateTooltip + span"))?.textContent() as string ?? "").replace(/,/g, "");
+  const zestimate2 = (await (await page.$("#details-page-container button + span.Text-c11n-8-53-2__sc-aiai24-0 > span"))?.textContent() as string ?? "").replace(/,/g, "");
+  var zestimate = "";
+  if (zestimate1)
+    zestimate = zestimate1;
+  else if (zestimate2)
+    zestimate = zestimate2;
+
   // rent estimate
-  const rentEstimate = await (await (await page.$("#ds-rental-home-values span.Text-c11n-8-53-2__sc-aiai24-0"))?.getProperty("innerText"))?.jsonValue();
+  const rentEstimate = ((await (await page.$("#ds-rental-home-values #ds-primary-zestimate-tooltip + div span"))?.innerHTML()) as string ?? "" ).replace(/,/g, "").replace("/mo", "");
   
   // estimated payment
-  const estimatedPayment = await (await (await page.$("div[class='hdp__sc-1tsvzbc-1 ds-chip'] div[class='Spacer-c11n-8-53-2__sc-17suqs2-0 dAArjJ'] span:nth-child(1)"))?.getProperty("innerText"))?.jsonValue();
-  
-  // square footage
-  const squareFootage = await (await (await page.$("body > div:nth-child(4) > div:nth-child(10) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(5) > div:nth-child(1) > div:nth-child(1) > div:nth-child(2) > div:nth-child(2) > div:nth-child(4) > div:nth-child(4) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(2) > span:nth-child(1) > span:nth-child(5) > span:nth-child(1)"))?.getProperty("innerText"))?.jsonValue();
-  
+  const estimatedPayment1 = ((await (await page.$("#skip-link-monthly-costs + div span:nth-of-type(2)"))?.textContent()) as string ?? "").replace(/,/g, "").replace("/mo", "");
+  const estimatedPayment2 = ((await (await page.$("#ds-container .ds-mortgage-row > div > div > span:nth-of-type(2)"))?.textContent()) as string ?? "").replace(/,/g, "").replace("/mo", "");
+  const estimatedPayment3 = ((await (await page.$(".summary-container > div > div > div:nth-of-type(4) > div > span:nth-of-type(2)"))?.textContent()) as string ?? "").replace(/,/g, "").replace("/mo", "");
+  var estimatedPayment = ""  
+  if (estimatedPayment1)
+    estimatedPayment = estimatedPayment1;
+  else if (estimatedPayment2)
+    estimatedPayment = estimatedPayment2;
+  else if (estimatedPayment3)
+    estimatedPayment = estimatedPayment3;
+
   // time on zillow
-  const timeOnZillow = await (await (await page.$("div[class='hdp__sc-qe1dn6-0 jAEoY'] div:nth-child(1) div:nth-child(1)"))?.getProperty("innerText"))?.jsonValue();
+  const timeOnZillow = (await (await page.$("#skip-link-overview + div > div > div:nth-of-type(2) > div > div > div > div:nth-of-type(2)"))?.innerText()) as string ?? "";
   
   // mls number
-  const mlsNumber = await (await (await page.$("div[class='Flex-c11n-8-53-2__sc-n94bjd-0 eLPOfN'] span:nth-child(1)"))?.getProperty("innerText"))?.jsonValue();
-  
+  const mlsNumberBlock = (await (await page.$("#skip-link-overview + div > div > div:nth-of-type(2) > div > div:nth-of-type(4) > span:nth-of-type(2)"))?.innerText()) as string ?? "";
+  const mlsNumber = mlsNumberBlock.includes("MLS") ? mlsNumberBlock : "";
+
   // year built
-  const yearBuilt = await (await (await page.$("div[class='Spacer-c11n-8-53-2__sc-17suqs2-0 eRCcvt'] li:nth-child(1) span:nth-child(1)"))?.getProperty("innerText"))?.jsonValue();
+  const yearBuilt = ((await (await page.$("#skip-link-facts-features + div li:nth-of-type(2)"))?.innerText()) as string ?? "").replace("Built in ", "");
   
   // hoa fee
-  const hoaFee = await (await (await page.$("div[class='Spacer-c11n-8-53-2__sc-17suqs2-0 eRCcvt'] li:nth-child(1) span:nth-child(1)"))?.getProperty("innerText"))?.jsonValue();
+  const hoaFeeBlock = ((await (await page.$("#skip-link-facts-features + div li:nth-of-type(6)"))?.innerText()) as string ?? "" ).replace(/,/g, "");
+  const hoaFee = hoaFeeBlock.includes("HOA") ? hoaFeeBlock : "";
 
-  writeLine(`${listingUrl},${price},${bedrooms},${bathrooms},${address},${zestimate},${rentEstimate},${city},${zip},${estimatedPayment},${squareFootage},${timeOnZillow},${mlsNumber},${yearBuilt},${hoaFee}`);
+  writeLine(`${listingUrl},${address},${city},${state},${zip},${price},${bedrooms},${bathrooms},${zestimate},${rentEstimate},${estimatedPayment},${squareFootage},${timeOnZillow},${mlsNumber},${yearBuilt},${hoaFee},${getDateTime()}`);
 
-  page.goBack();
-
-  await page.waitForTimeout(timeout);
+  const backButton = await page.$(".ds-close-lightbox-icon");
+  backButton?.click();
+  
+  await page.waitForTimeout(5000);
 }
 
 const writeLine = (text: string) => {
@@ -117,39 +141,70 @@ const writeLine = (text: string) => {
     }
   });
 }
+
+const getDateTime = () => {
+  const date_ob = new Date();
+
+  // current date
+  // adjust 0 before single digit date
+  const date = ("0" + date_ob.getDate()).slice(-2);
+
+  // current month
+  const month = ("0" + (date_ob.getMonth() + 1)).slice(-2);
+
+  // current year
+  const year = date_ob.getFullYear();
+
+  // current hours
+  const hours = date_ob.getHours();
+
+  // current minutes
+  const minutes = date_ob.getMinutes();
+
+  // current seconds
+  const seconds = date_ob.getSeconds();
+
+  return year + "-" + month + "-" + date + " " + hours + ":" + minutes + ":" + seconds;
+}
   
 async function main() {
-  // clear output file contents
-  fs.truncate(outputFile, 0, () => {});
+  try {
+    // print process.argv
+    const url = process.argv[2];
 
-  // write output file headers
-  writeLine(outputHeaders.join(","));
+    // clear output file contents
+    fs.truncate(outputFile, 0, () => {});
 
-  const browser = await playwright.firefox.launch({
-    headless: false
-  });
+    // write output file headers
+    writeLine(outputHeaders.join(","));
 
-  const page = await browser.newPage();
+    const browser = await playwright.firefox.launch({
+      headless: false
+    });
 
-  await page.goto("https://www.zillow.com/homes/Minneapolis,-MN_rb/");
-  await page.waitForTimeout(timeout);
+    const page = await browser.newPage();
 
-  while (true)
-  {
-    await processPage(page);
+    await page.goto(url);
+    await page.waitForTimeout(8000);
 
-    const nextPageButton = await page.$("a[title='Next page']:not([disabled])");
-    if (nextPageButton) {
-      // if the "next page" button is active, click it and process the next page
-      await nextPageButton.click();
-      await page.waitForTimeout(timeout);
-    } else {
-      // if the "next page" button doesn't exist, or is disabled, we're done
-      break;
+    while (true)
+    {
+      await processPage(page);
+
+      const nextPageButton = await page.$("a[title='Next page']:not([disabled])");
+      if (nextPageButton) {
+        // if the "next page" button is active, click it and process the next page
+        nextPageButton.click();
+        await page.waitForTimeout(8000);
+      } else {
+        // if the "next page" button doesn't exist, or is disabled, we're done
+        break;
+      }
     }
+    await browser.close();
+  } catch (err) {
+    // wtf
   }
-
-  await browser.close();
 }
 
 main();
